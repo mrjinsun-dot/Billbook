@@ -64,8 +64,8 @@
 
   <header>
     <div>
-      <h1>वस्त्रमित्र AI खाता</h1>
-      <small style="opacity:0.8; font-size:10px;">सप्लायर & खरीदार बिल ट्रैकिंग</small>
+      <h1>वस्त्रमित्र AI खाता v2.1</h1>
+      <small style="opacity:0.8; font-size:10px;">सप्लायर & बिल ट्रैकिंग</small>
     </div>
     <button class="btn-key" onclick="setApiKey()">🔑 AI Key</button>
   </header>
@@ -123,13 +123,13 @@
 
     <div class="form-group">
       <label style="color:var(--primary); font-weight:700;">🏢 सप्लायर का नाम (विक्रेता / फर्म) *</label>
-      <input type="text" id="bSupplier" placeholder="जैसे: SANJAY TRADING CO.">
+      <input type="text" id="bSupplier" placeholder="सप्लायर फर्म नाम">
     </div>
 
     <div style="display:flex; gap:8px;" class="form-group">
       <div style="flex:1;">
         <label>खरीदार / दुकान का नाम</label>
-        <input type="text" id="bBuyer" placeholder="दुकान का नाम">
+        <input type="text" id="bBuyer" placeholder="Billed to नाम">
       </div>
       <div style="flex:1;">
         <label>बिल नंबर</label>
@@ -166,7 +166,7 @@
     <button class="btn-act btn-camera" style="width:100%; margin-top:6px;" onclick="saveBill()">✓ बिल सुरक्षित करें</button>
   </div>
 
-  <!-- पेमेंट फॉर्म (Proper Native Select Dropdown) -->
+  <!-- भुगतान फॉर्म (Dropdown) -->
   <div class="form-box" id="payForm">
     <div style="display:flex; justify-content:space-between; margin-bottom:12px;">
       <h3 style="font-size:15px;">💰 सप्लायर को भुगतान दर्ज करें</h3>
@@ -176,7 +176,6 @@
     <div class="form-group">
       <label>सप्लायर चुनें *</label>
       <select id="pPartySelect" onchange="checkCustomSupplier(this.value)">
-        <!-- Options dynamically loaded -->
       </select>
     </div>
 
@@ -237,6 +236,8 @@
         if (!apiKey) return;
       }
 
+      // Purana form chupayein
+      document.getElementById('billForm').style.display = 'none';
       const loader = document.getElementById('aiLoader');
       const statusText = document.getElementById('loaderStatus');
       loader.style.display = 'block';
@@ -256,7 +257,6 @@
       } catch (err) {
         loader.style.display = 'none';
         alert("स्कैन एरर: " + err.message);
-        openBillFormWithData({});
       } finally {
         e.target.value = '';
       }
@@ -302,59 +302,68 @@
     async function callGeminiAI(base64Data) {
       const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
 
-      const promptText = `Examine this wholesale/retail invoice image and extract details. 
-Output STRICT RAW JSON ONLY. No markdown, no backticks, no text.
-JSON Structure:
+      const promptText = `Extract invoice details from this image. Output ONLY RAW JSON (no markdown backticks, no words outside JSON).
+Structure:
 {
-  "supplierName": "Seller / Company at top",
-  "buyerName": "Buyer / Billed to customer",
-  "invoiceNo": "Invoice or Bill No",
+  "supplierName": "Seller or company at top",
+  "buyerName": "Buyer or customer name",
+  "invoiceNo": "Invoice/Bill number",
   "date": "YYYY-MM-DD",
   "items": [{"name": "Item description", "qty": 1, "rate": 0, "total": 0}],
   "grandTotal": 0
 }`;
 
-      try {
-        const res = await fetch(apiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              parts: [
-                { text: promptText },
-                { inline_data: { mime_type: "image/jpeg", data: base64Data } }
-              ]
-            }]
-          })
-        });
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: promptText },
+              { inline_data: { mime_type: "image/jpeg", data: base64Data } }
+            ]
+          }]
+        })
+      });
 
-        document.getElementById('aiLoader').style.display = 'none';
-        const resJson = await res.json();
+      document.getElementById('aiLoader').style.display = 'none';
+      const resJson = await res.json();
 
-        if (resJson.candidates && resJson.candidates[0].content) {
-          let text = resJson.candidates[0].content.parts[0].text;
-          text = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
-          
-          try {
-            const parsed = JSON.parse(text);
-            openBillFormWithData(parsed);
-          } catch (pe) {
-            // Robust Regex Fallback
-            openBillFormWithData({
-              supplierName: extractRegex(text, /supplier(?:Name)?["':\s*]+([^\n",*]+)/i),
-              buyerName: extractRegex(text, /buyer(?:Name)?["':\s*]+([^\n",*]+)/i),
-              invoiceNo: extractRegex(text, /invoice(?:No)?["':\s*]+([^\n",*]+)/i),
-              grandTotal: extractAmount(text)
-            });
+      if (resJson.error) {
+        throw new Error("Google API Error: " + resJson.error.message);
+      }
+
+      if (resJson.candidates && resJson.candidates[0].content) {
+        let text = resJson.candidates[0].content.parts[0].text;
+        text = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
+
+        let parsed = null;
+        try {
+          parsed = JSON.parse(text);
+        } catch (pe) {
+          // JSON string cleaning
+          const start = text.indexOf('{');
+          const end = text.lastIndexOf('}');
+          if (start !== -1 && end !== -1) {
+            try {
+              parsed = JSON.parse(text.substring(start, end + 1));
+            } catch(e) {}
           }
-        } else {
-          alert("AI बिल नहीं पढ़ पाया, कृपया मैन्युअल भरें।");
-          openBillFormWithData({});
         }
-      } catch (err) {
-        document.getElementById('aiLoader').style.display = 'none';
-        alert("रुकावट: " + err.message);
-        openBillFormWithData({});
+
+        if (parsed) {
+          openBillFormWithData(parsed);
+        } else {
+          // Fallback parsing
+          openBillFormWithData({
+            supplierName: extractRegex(text, /supplier(?:Name)?["':\s*]+([^\n",*]+)/i),
+            buyerName: extractRegex(text, /buyer(?:Name)?["':\s*]+([^\n",*]+)/i),
+            invoiceNo: extractRegex(text, /invoice(?:No)?["':\s*]+([^\n",*]+)/i),
+            grandTotal: extractAmount(text)
+          });
+        }
+      } else {
+        throw new Error("AI ne image se koi text return nahi kiya.");
       }
     }
 
@@ -369,7 +378,6 @@ JSON Structure:
     }
 
     function openBillFormWithData(d) {
-      document.getElementById('billForm').style.display = 'block';
       document.getElementById('bSupplier').value = d.supplierName || '';
       document.getElementById('bBuyer').value = d.buyerName || '';
       document.getElementById('bNo').value = d.invoiceNo || 'B-' + Math.floor(100 + Math.random()*900);
@@ -396,7 +404,9 @@ JSON Structure:
           <td><input type="number" value="${d.grandTotal || 0}"></td>
         </tr>`;
       }
-      window.scrollTo({ top: 300, behavior: 'smooth' });
+
+      document.getElementById('billForm').style.display = 'block';
+      window.scrollTo({ top: 320, behavior: 'smooth' });
     }
 
     function saveBill() {
@@ -407,7 +417,6 @@ JSON Structure:
       if (!supplier) return alert("कृपया सप्लायर का नाम लिखें");
       if (total <= 0) return alert("बिल की कुल रकम लिखें");
 
-      // Reload fresh from storage to prevent overwriting
       bills = JSON.parse(localStorage.getItem('vm_bills') || '[]');
       payments = JSON.parse(localStorage.getItem('vm_payments') || '[]');
 
@@ -435,7 +444,7 @@ JSON Structure:
 
       document.getElementById('billForm').style.display = 'none';
       render();
-      alert("✓ नया बिल सफलतापूर्वक सुरक्षित हुआ!");
+      alert("✓ नया बिल सुरक्षित हो गया!");
     }
 
     function showPayForm() {
@@ -453,7 +462,7 @@ JSON Structure:
       document.getElementById('pPartyCustom').value = '';
       document.getElementById('pAmt').value = '';
       document.getElementById('payForm').style.display = 'block';
-      window.scrollTo({ top: 300, behavior: 'smooth' });
+      window.scrollTo({ top: 320, behavior: 'smooth' });
     }
 
     function checkCustomSupplier(val) {
@@ -489,7 +498,7 @@ JSON Structure:
       localStorage.setItem('vm_payments', JSON.stringify(payments));
       document.getElementById('payForm').style.display = 'none';
       render();
-      alert("✓ भुगतान सफलतापूर्वक दर्ज हो गया!");
+      alert("✓ भुगतान दर्ज हो गया!");
     }
 
     function toggleView(v) {
